@@ -20,6 +20,8 @@ bool USE_ALL_CORES = 0;
 void help() {
     printf("Run ElcoreCL kernel on DSP\n");
     printf(" -e <file> \t ELF ElcoreCL kernel file to run (mandatory)\n");
+    printf(" -f function \t kernel function\n");
+    printf(" -p <platform> \t platform to run kernel, default: 1\n");
     printf(" -s <count> \t size of shared memory in bytes\n");
     printf(" --core=<cores> \t comma separated list of cores or ranges, e.g. 0,4-6,9 "
            "or `all` to select all available cores, default: 0\n");
@@ -101,6 +103,7 @@ std::set<ecl_uint> parse_cores(const std::string str_cores) {
 
 int main(int argc, char **argv) {
     int opt, ret;
+    int platform = 0;
     ecl_uint ncores;
     char *func_name, *elf;
     size_t shmem_size = 0;
@@ -115,7 +118,7 @@ int main(int argc, char **argv) {
     char *init_sync_file = NULL, *wait_for_file = NULL;
 
 
-    while ((opt = getopt_long(argc, argv, "he:f:s:", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "he:f:p:s:", long_options, &option_index)) != -1) {
         switch (opt) {
             case 0:
                 switch (option_index) {
@@ -133,11 +136,17 @@ int main(int argc, char **argv) {
                         break;
                 }
                 break;
+            case 'f':
+                func_name = optarg;
+                break;
             case 'h':
                 help();
                 return EXIT_SUCCESS;
             case 'e':
                 elf = optarg;
+                break;
+            case 'p':
+                platform = atoi(optarg);
                 break;
             case 's':
                 shmem_size = atoi(optarg);
@@ -169,9 +178,11 @@ int main(int argc, char **argv) {
     }
     kernel_arguments_aligned[offset] = '\0';  // the final empty string
 
-    ecl_platform_id platform_id;
-    ret = eclGetPlatformIDs(1, &platform_id, nullptr);
+    ecl_platform_id platform_ids[2];
+    ret = eclGetPlatformIDs(2, &platform_ids[0], nullptr);
     if (ret != ECL_SUCCESS) errx(1, "Failed to get platform id. Error code: %d", ret);
+    if (platform < 0 || platform > 1) errx(1, "Failed platform number %d", platform);
+    ecl_platform_id platform_id = platform_ids[platform];
     ecl_uint ndevs = 0;
     ret = eclGetDeviceIDs(platform_id, ECL_DEVICE_TYPE_CUSTOM, 0, nullptr, &ndevs);
     if (ret != ECL_SUCCESS) errx(1, "Failed to get device id. Error code: %d", ret);
