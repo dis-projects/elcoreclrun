@@ -13,5 +13,9 @@ add_executable(elcorecl-run elcorecl-run.cc)
 target_include_directories(elcorecl-run PRIVATE .)
 target_link_libraries(elcorecl-run PRIVATE elcorecl)
 
-install(TARGETS elcorecl-run
+add_executable(cl-double cl-double.cc)
+target_include_directories(cl-double PRIVATE .)
+target_link_libraries(cl-double PRIVATE elcorecl)
+
+install(TARGETS elcorecl-run cl-double
         RUNTIME DESTINATION bin)

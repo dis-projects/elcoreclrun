@@ -23,6 +23,7 @@ TARGET_CFLAGS += -I$(STAGING_DIR_ROOT)/usr/include
 define Package/elcoreclrun/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/elcorecl-run $(1)/usr/bin/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cl-double $(1)/usr/bin/
 endef
 
 $(eval $(call BuildPackage,elcoreclrun))

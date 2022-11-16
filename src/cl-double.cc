@@ -18,19 +18,7 @@
 bool USE_ALL_CORES = 0;
 
 void help() {
-    printf("Run ElcoreCL kernel on DSP\n");
-    printf(" -e <file> \t ELF ElcoreCL kernel file to run (mandatory)\n");
-    printf(" -f function \t kernel function\n");
-    printf(" -p <platform> \t platform to run kernel, default: 1\n");
-    printf(" -s <count> \t size of shared memory in bytes\n");
-    printf(" --core=<cores> \t comma separated list of cores or ranges, e.g. 0,4-6,9 "
-           "or `all` to select all available cores, default: 0\n");
-    printf(
-        " --init-sync-file <file-name> \t create file <file-name> after initialization is "
-        "completed\n");
-    printf(" --wait-for-file <file-name> \t wait for <file-name> is created before start jobs\n");
-    printf(" -- <list of arguments> \t set arguments to kernel. This arguments will be passed to"
-           "main() in kernel\n");
+    printf("Run ElcoreCL kernel on DSP and risc1 program on RISC1\n");
 }
 
 void ECL_CALLBACK MemoryDestructor(ecl_mem, void *user_data) { free(user_data); }
@@ -104,12 +92,13 @@ std::set<ecl_uint> parse_cores(const std::string str_cores) {
 int main(int argc, char **argv) {
     int opt, ret;
     int platform = 0;
-    ecl_uint ncores;
-    char *func_name, *elf;
+    ecl_uint ncores, rncores;
+    char *func_name, *elf, *relf;
     size_t shmem_size = 0;
     elf = NULL;
     func_name = "_elcore_main_wrapper";
     std::set<ecl_uint> cores;
+    std::set<ecl_uint> rcores;
     static struct option long_options[] = {{"init-sync-file", required_argument, 0, 0},
                                            {"wait-for-file", required_argument, 0, 0},
                                            {"core", optional_argument, 0, 0},
@@ -143,7 +132,11 @@ int main(int argc, char **argv) {
                 help();
                 return EXIT_SUCCESS;
             case 'e':
-                elf = optarg;
+                if (elf == NULL) {
+                    elf = optarg;
+                } else {
+                    relf = optarg;
+                }
                 break;
             case 'p':
                 platform = atoi(optarg);
@@ -156,7 +149,7 @@ int main(int argc, char **argv) {
                 error(EXIT_FAILURE, errno, "Try %s -h for help.\n", argv[0]);
         }
     }
-    if (elf == NULL) errx(1, "Elf file is not specified");
+    if (relf == NULL) errx(1, "Elf file is not specified");
 
     std::vector<std::string> kernel_arguments;
     kernel_arguments.push_back(elf);  // the program name is the first argument
@@ -178,14 +171,14 @@ int main(int argc, char **argv) {
     }
     kernel_arguments_aligned[offset] = '\0';  // the final empty string
 
-    ecl_platform_id platform_ids[2];
+    ecl_platform_id platform_ids[2]; // elcore50 is 0, risc1 is 1
     ret = eclGetPlatformIDs(2, &platform_ids[0], nullptr);
     if (ret != ECL_SUCCESS) errx(1, "Failed to get platform id. Error code: %d", ret);
     if (platform < 0 || platform > 1) errx(1, "Failed platform number %d", platform);
-    ecl_platform_id platform_id = platform_ids[platform];
+    //ecl_platform_id platform_id = platform_ids[platform];
     ecl_uint ndevs = 0;
-    ret = eclGetDeviceIDs(platform_id, ECL_DEVICE_TYPE_CUSTOM, 0, nullptr, &ndevs);
-    if (ret != ECL_SUCCESS) errx(1, "Failed to get device id. Error code: %d", ret);
+    ret = eclGetDeviceIDs(platform_ids[0], ECL_DEVICE_TYPE_CUSTOM, 0, nullptr, &ndevs);
+    if (ret != ECL_SUCCESS) errx(1, "Failed to get elcore device id. Error code: %d", ret);
     if (USE_ALL_CORES) {
         ncores = ndevs;
         for (int i = 0; i < ncores; ++i)
@@ -198,8 +191,22 @@ int main(int argc, char **argv) {
 
     if (*cores.rbegin() >= ndevs) errx(1, "Specified wrong core: %d\n", *cores.rbegin());
 
+    ecl_uint rndevs = 0;
+    ret = eclGetDeviceIDs(platform_ids[1], ECL_DEVICE_TYPE_CUSTOM, 0, nullptr, &rndevs);
+    if (ret != ECL_SUCCESS) errx(1, "Failed to get risc1 device id. Error code: %d", ret);
+    if (rcores.size() == 0) {
+        rncores = 1;
+        rcores.insert(0);
+    }
+
+    if (*rcores.rbegin() >= rndevs) errx(1, "Specified wrong core: %d\n", *cores.rbegin());
+
     std::vector<ecl_device_id> all_devices(ndevs);
-    ret = eclGetDeviceIDs(platform_id, ECL_DEVICE_TYPE_CUSTOM, ndevs, &all_devices[0], nullptr);
+    ret = eclGetDeviceIDs(platform_ids[0], ECL_DEVICE_TYPE_CUSTOM, ndevs, &all_devices[0], nullptr);
+    if (ret != ECL_SUCCESS) errx(1, "Failed to get device id. Error code: %d", ret);
+
+    std::vector<ecl_device_id> rall_devices(rndevs);
+    ret = eclGetDeviceIDs(platform_ids[1], ECL_DEVICE_TYPE_CUSTOM, rndevs, &rall_devices[0], nullptr);
     if (ret != ECL_SUCCESS) errx(1, "Failed to get device id. Error code: %d", ret);
 
     std::vector<ecl_device_id> selected_devices;
@@ -216,6 +223,12 @@ int main(int argc, char **argv) {
     if (context == nullptr || result != ECL_SUCCESS)
         errx(1, "Failed to create context. Error code: %d", result);
 
+    ecl_int rresult;
+    ecl_context rcontext =
+        eclCreateContext(nullptr, rncores, &rall_devices[0], nullptr, nullptr, &rresult);
+    if (rcontext == nullptr || rresult != ECL_SUCCESS)
+        errx(1, "Failed to create context. Error code: %d", rresult);
+
     std::vector<char> elf_buffer;
     size_t elf_size[ncores];
     {
@@ -225,6 +238,17 @@ int main(int argc, char **argv) {
         file.seekg(0, std::ios::beg);
         elf_buffer.resize(elf_size[0]);
         file.read(elf_buffer.data(), elf_size[0]);
+    }
+
+    std::vector<char> relf_buffer;
+    size_t relf_size;
+    {
+        std::ifstream file(relf, std::ios::binary | std::ios::ate);
+        if (!file) errx(1, "Failed to open %s. Error code: %d", elf, errno);
+        relf_size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        relf_buffer.resize(relf_size);
+        file.read(relf_buffer.data(), relf_size);
     }
 
     const unsigned char *elfs[ncores];
@@ -319,6 +343,14 @@ int main(int argc, char **argv) {
             errx(1, "Failed to enqueued kernel for device %d. Error code: %d", *core_num, ret);
     }
     printf(" and wait all %d cores\n", ncores);
+        const unsigned char *relfs[1] = {reinterpret_cast<unsigned char *>(relf_buffer.data())};
+
+    ecl_program rprogram = eclCreateProgramWithBinary(rcontext, rncores, &rall_devices[0],
+                &relf_size, &relfs[0], nullptr, &rresult);
+    if (rprogram == nullptr || rresult != ECL_SUCCESS) {
+        errx(1, "Failed to create program. Error code: %d", rresult);
+    }
+
     ret = eclWaitForEvents(ncores, kernel_event);
     if (ret != ECL_SUCCESS) errx(1, "Failed to wait for event. Error code: %d", ret);
 
